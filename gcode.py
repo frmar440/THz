@@ -4,7 +4,7 @@ import numpy as np
 from scipy.optimize import least_squares
 
 
-FILE = 'circular_v03.gcode'
+FILE = "C:\\Users\\frede\\Documents\\ResearchA22\\CAD\\circular_v03.gcode"
 n = 10
 speed = 1500
 height = 0.4
@@ -72,13 +72,20 @@ class GCODEModifier:
         x_prime = x - x0
         y_prime = y - y0
 
+        arg = x_prime/R
+
+        if arg < -1:
+            arg = -1
+        elif arg > 1:
+            arg = 1
+
         if y_prime > 0:
-            return np.arccos(x_prime/R)
+            return np.arccos(arg)
         else:
-            return -np.arccos(x_prime/R) % (2*np.pi)
+            return -np.arccos(arg) % (2*np.pi)
 
 
-    def DiscreteG2(self, n:int) -> None:
+    def DiscreteG2(self, n:int, speed=1160) -> None:
         """Discrete arc command
 
         Args:
@@ -92,7 +99,7 @@ class GCODEModifier:
                 i1 = i
                 b = True
             if b:
-                arc_commands.append(command)
+                arc_commands.append(command[:-2])
             if command.split()[-1] == ';P2':
                 i2 = i
                 break
@@ -121,8 +128,13 @@ class GCODEModifier:
         y = R*np.sin(theta) + y0
 
         new_commands = []
+        i = 0
         for parameter in zip(x, y, e):
-            new_commands.append(f'G1 X{parameter[0]:.3f} Y{parameter[0]:.3f} E{parameter[0]:.4f}')
+            if i == 0:
+                new_commands.append(f'G1 F{speed} X{parameter[0]:.3f} Y{parameter[1]:.3f} E{parameter[2]:.4f}\n')
+                i += 1
+            else:
+                new_commands.append(f'G1 X{parameter[0]:.3f} Y{parameter[1]:.3f} E{parameter[2]:.4f}\n')
 
         self.commands = self.commands[:i1] + new_commands + self.commands[i2+1:]
 
@@ -136,15 +148,15 @@ class GCODEModifier:
 
         b = False
         for i, command in enumerate(self.commands):
-            if command == ';LAYER:1':
+            if command == ';LAYER:1\n':
                 b = True
             if b:
                 parameters = command.split()
                 if ('G0' in parameters) and ('F6000' in parameters):
                     parameters.remove('F6000')
                     parameters.append(f'F{speed}')
-                    self.commands[i] = ' '.join(parameters)
-            if command == ';LAYER:2':
+                    self.commands[i] = ' '.join(parameters) + '\n'
+            if command == ';LAYER:2\n':
                 break
 
 
@@ -156,7 +168,7 @@ class GCODEModifier:
         """
         b = False
         for i, command in enumerate(self.commands):
-            if command == ';LAYER:2':
+            if command == ';LAYER:2\n':
                 b = True
             if b:
                 parameters = command.split()
@@ -166,7 +178,7 @@ class GCODEModifier:
                             z = float(parameter[1:]) - height
                             parameters.remove(parameter)
                             parameters.append(f'Z{z:.3f}')
-                    self.commands[i] = ' '.join(parameters)
+                    self.commands[i] = ' '.join(parameters) + '\n'
 
 
 # load commands
@@ -179,6 +191,7 @@ modifier.DiscreteG2(n=n)
 modifier.SlowGratings(speed=speed)
 modifier.LowerSupport(height=height)
 
+name, ext = FILE.split('.')
 # save modified commands
-with open(f'{FILE}_mod', 'w') as f:
+with open(f'{name}_mod.{ext}', 'w') as f:
     f.writelines(modifier.commands)

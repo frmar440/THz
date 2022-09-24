@@ -4,9 +4,34 @@ import numpy as np
 from scipy.optimize import least_squares
 
 
-def DiscreteG2(commands:List[str], n:int):
+FILE = 'circular_v03.gcode'
+n = 10
+speed = 1500
+height = 0.4
 
-    def getCircle(x:np.ndarray, y:np.ndarray) -> tuple:
+class GCODEModifier:
+
+
+    def __init__(self, commands:List[str]):
+        """Constructor
+
+        Args:
+            commands (List[str]): List of GCODE commands provided by the slicer
+        """
+        self.commands = commands
+
+
+    def getCircle(self, x:np.ndarray, y:np.ndarray) -> tuple:
+        """Get circle (x0, y0, R) from points (x, y) by solving
+        a nonlinear least-squares problem
+
+        Args:
+            x (np.ndarray): Array of x positions
+            y (np.ndarray): Array of y positions
+
+        Returns:
+            tuple: [x0, y0, R]
+        """
 
         def residuals(parameters: np.ndarray) -> np.ndarray:
             """Measure of the distance between points (x, y) and the circle (x0, y0, R)
@@ -30,7 +55,19 @@ def DiscreteG2(commands:List[str], n:int):
         return x0, y0, R
 
 
-    def getTheta(x0:float, y0:float, R:float, x:float, y:float) -> float:
+    def getTheta(self, x0:float, y0:float, R:float, x:float, y:float) -> float:
+        """Compute polar angle in range [0, 2pi] of point (x, y) on circle (x0, y0, R)
+
+        Args:
+            x0 (float): x position of center
+            y0 (float): y position of center
+            R (float): radius of circle
+            x (float): x position of point
+            y (float): y position of point
+
+        Returns:
+            float: polar angle in range [0, 2pi]
+        """
 
         x_prime = x - x0
         y_prime = y - y0
@@ -40,92 +77,108 @@ def DiscreteG2(commands:List[str], n:int):
         else:
             return -np.arccos(x_prime/R) % (2*np.pi)
 
-    arc_commands = []
-    b = 0
-    for i, command in enumerate(commands):
-        if command.split()[-1] == ';P1':
-            i1 = i
-            b = 1
-        if b:
-            arc_commands.append(command)
-        if command.split()[-1] == ';P2':
-            i2 = i
-            break
 
-    x = []
-    y = []
-    e = []
-    for arc_command in arc_commands:
-        for parameter in arc_command.split():
-            if parameter[0] == 'X':
-                x.append(float(parameter[1:]))
-            elif parameter[0] == 'Y':
-                y.append(float(parameter[1:]))
-            elif parameter[0] == 'E':
-                e.append(float(parameter[1:]))
+    def DiscreteG2(self, n:int) -> None:
+        """Discrete arc command
 
-    x0, y0, R = getCircle(x, y)
+        Args:
+            n (int): number of discrete steps in printing
+        """
 
-    theta1 = getTheta(x0, y0, R, x[0], y[0])
-    theta2 = getTheta(x0, y0, R, x[-1], y[-1])
+        arc_commands = []
+        b = False
+        for i, command in enumerate(self.commands):
+            if command.split()[-1] == ';P1':
+                i1 = i
+                b = True
+            if b:
+                arc_commands.append(command)
+            if command.split()[-1] == ';P2':
+                i2 = i
+                break
 
-    theta = theta1 + (theta2 - theta1)*np.arange(1,n)/n
-    e = e[0] + (e[-1] - e[0])*np.arange(1,n)/n
+        x = []
+        y = []
+        e = []
+        for arc_command in arc_commands:
+            for parameter in arc_command.split():
+                if parameter[0] == 'X':
+                    x.append(float(parameter[1:]))
+                elif parameter[0] == 'Y':
+                    y.append(float(parameter[1:]))
+                elif parameter[0] == 'E':
+                    e.append(float(parameter[1:]))
 
-    x = R*np.cos(theta) + x0
-    y = R*np.sin(theta) + y0
+        x0, y0, R = self.getCircle(x, y)
 
-    new_commands = []
-    for parameter in zip(x, y, e):
-        new_commands.append(f'G1 X{parameter[0]:.3f} Y{parameter[0]:.3f} E{parameter[0]:.4f}')
+        theta1 = self.getTheta(x0, y0, R, x[0], y[0])
+        theta2 = self.getTheta(x0, y0, R, x[-1], y[-1])
 
-    return commands[:i1+1] + new_commands + commands[i2:]
+        theta = theta1 + (theta2 - theta1)*np.arange(0,n+1)/n
+        e = e[0] + (e[-1] - e[0])*np.arange(0,n+1)/n
 
+        x = R*np.cos(theta) + x0
+        y = R*np.sin(theta) + y0
 
-def SlowGratings(commands:List[str]):
+        new_commands = []
+        for parameter in zip(x, y, e):
+            new_commands.append(f'G1 X{parameter[0]:.3f} Y{parameter[0]:.3f} E{parameter[0]:.4f}')
 
-    b = 0
-    for i, command in enumerate(commands):
-        if command == ';LAYER:1':
-            b = 1
-        if b:
-            parameters = command.split()
-            if ('G0' in parameters) and ('F6000' in parameters):
-                parameters.remove('F6000')
-                parameters.append('F1500')
-                commands[i] = ' '.join(parameters)
-        if command == ';LAYER:2':
-            break
-    
-    return commands
+        self.commands = self.commands[:i1] + new_commands + self.commands[i2+1:]
 
 
-def LowerSupport(commands:List[str]):
+    def SlowGratings(self, speed=1500) -> None:
+        """Slow G0 commands in printing gratings
 
-    b = 0
-    for i, command in enumerate(commands):
-        if command == ';LAYER:2':
-            b = 1
-        if b:
-            parameters = command.split()
-            if ('G0' in parameters) and ('Z' in command):
-                for parameter in parameters:
-                    if parameter[0] == 'Z':
-                        z = float(parameter[1:]) - 0.4
-                        parameters.remove(parameter)
-                        parameters.append(f'Z{z:.3f}')
-                commands[i] = ' '.join(parameters)
+        Args:
+            speed (int, optional): Printing speed (mm/min). Defaults to 1500.
+        """
 
-    return commands
-
-
-
-
+        b = False
+        for i, command in enumerate(self.commands):
+            if command == ';LAYER:1':
+                b = True
+            if b:
+                parameters = command.split()
+                if ('G0' in parameters) and ('F6000' in parameters):
+                    parameters.remove('F6000')
+                    parameters.append(f'F{speed}')
+                    self.commands[i] = ' '.join(parameters)
+            if command == ';LAYER:2':
+                break
 
 
+    def LowerSupport(self, height=0.4) -> None:
+        """Lower support printing height for layers 2+
+
+        Args:
+            height (float, optional): Lowering height. Defaults to 0.4.
+        """
+        b = False
+        for i, command in enumerate(self.commands):
+            if command == ';LAYER:2':
+                b = True
+            if b:
+                parameters = command.split()
+                if ('G0' in parameters) and ('Z' in command):
+                    for parameter in parameters:
+                        if parameter[0] == 'Z':
+                            z = float(parameter[1:]) - height
+                            parameters.remove(parameter)
+                            parameters.append(f'Z{z:.3f}')
+                    self.commands[i] = ' '.join(parameters)
 
 
-x=[1, 1/np.sqrt(2), 0]
-y=[0, 1/np.sqrt(2), 1]
+# load commands
+with open(FILE, 'r') as f:
+    commands = f.readlines()
 
+# apply modifications
+modifier = GCODEModifier(commands)
+modifier.DiscreteG2(n=n)
+modifier.SlowGratings(speed=speed)
+modifier.LowerSupport(height=height)
 
+# save modified commands
+with open(f'{FILE}_mod', 'w') as f:
+    f.writelines(modifier.commands)
